@@ -3,7 +3,6 @@ import pycuda.autoinit
 import pycuda.driver as cuda
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 
 class BaseEngine(object):
     def __init__(self, engine_path):
@@ -67,13 +66,16 @@ class BaseEngine(object):
             if not ret:
                 break
             blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
+
+            # TODO: turn timing into logging only
             t1 = time.time()
             data = self.infer(blob)
             t2 = time.time()
+
             # net inference time in ms and average FPS
             fps = (fps + (1. / (t2 - t1))) / 2
-            frame = cv2.putText(frame, f"Inference: {(1E3 * (t2 - t1)):.1f}ms, Avg FPS: {fps:.1f}", (0, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                                (0, 0, 255), 2)
+            print(f"Inference: {(1E3 * (t2 - t1)):.1f}ms, Avg FPS: {fps:.1f}")
+            
             if end2end:
                 num, final_boxes, final_scores, final_cls_inds = data
                 final_boxes = np.reshape(final_boxes/ratio, (-1, 4))
@@ -85,9 +87,9 @@ class BaseEngine(object):
             if dets is not None:
                 final_boxes, final_scores, final_cls_inds = dets[:,
                                                                 :4], dets[:, 4], dets[:, 5]
-                frame = vis(frame, final_boxes, final_scores, final_cls_inds,
-                                conf=conf, class_names=self.class_names)
-            cv2.imshow('frame', frame)
+                pruned_boxes, pruned_scores, pruned_labels = prune_bounding_boxes(final_boxes, final_scores, final_cls_inds,
+                             conf=conf, class_names=self.class_names)
+                # TODO: send this data to the RPi
             if cv2.waitKey(25) & 0xFF == ord('q'):
                 break
         cap.release()
@@ -108,9 +110,10 @@ class BaseEngine(object):
         if dets is not None:
             final_boxes, final_scores, final_cls_inds = dets[:,
                                                              :4], dets[:, 4], dets[:, 5]
-            origin_img = vis(origin_img, final_boxes, final_scores, final_cls_inds,
+            pruned_boxes, pruned_scores, pruned_labels = prune_bounding_boxes(final_boxes, final_scores, final_cls_inds,
                              conf=conf, class_names=self.class_names)
-        return origin_img
+            return (pruned_boxes, pruned_scores, pruned_labels)
+        return ([], [], [])
 
     @staticmethod
     def postprocess(predictions, ratio):
@@ -205,9 +208,6 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
         interpolation=cv2.INTER_LINEAR,
     ).astype(np.float32)
     padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-    # if use yolox set
-    # padded_img = padded_img[:, :, ::-1]
-    # padded_img /= 255.0
     padded_img = padded_img[:, :, ::-1]
     padded_img /= 255.0
     if mean is not None:
@@ -218,49 +218,36 @@ def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
     padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
     return padded_img, r
 
+# this function:
+# - prunes bounding boxes below the conf threshold
+# - maps class ids to labels
+# - by default, scores are sorted by confidence
+def prune_bounding_boxes(boxes, scores, cls_ids, conf=0.5, class_names=None):
+    pruned_boxes = []
+    pruned_scores = []
+    pruned_labels = []
 
-def rainbow_fill(size=50):  # simpler way to generate rainbow color
-    cmap = plt.get_cmap('jet')
-    color_list = []
-
-    for n in range(size):
-        color = cmap(n/size)
-        color_list.append(color[:3])  # might need rounding? (round(x, 3) for x in color)[:3]
-
-    return np.array(color_list)
-
-
-_COLORS = rainbow_fill(80).astype(np.float32).reshape(-1, 3)
-
-
-def vis(img, boxes, scores, cls_ids, conf=0.5, class_names=None):
     for i in range(len(boxes)):
-        box = boxes[i]
-        cls_id = int(cls_ids[i])
         score = scores[i]
         if score < conf:
             continue
+
+        box = boxes[i]
         x0 = int(box[0])
         y0 = int(box[1])
         x1 = int(box[2])
         y1 = int(box[3])
 
-        color = (_COLORS[cls_id] * 255).astype(np.uint8).tolist()
-        text = '{}:{:.1f}%'.format(class_names[cls_id], score * 100)
-        txt_color = (0, 0, 0) if np.mean(_COLORS[cls_id]) > 0.5 else (255, 255, 255)
-        font = cv2.FONT_HERSHEY_SIMPLEX
+        # boxes represented as top left corner and bottom right corner
+        # of a rectangle (compatible with opencv)
+        pruned_boxes.append([(x0, y0), (x1, y1)])
+        pruned_scores.append(scores[i])
+        pruned_labels.append(class_names[int(cls_ids[i])])
 
-        txt_size = cv2.getTextSize(text, font, 0.4, 1)[0]
-        cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
+    # TODO: turn into logging statement
+    if len(pruned_boxes) == 0:
+        print ("no bounding boxes found\n\n")
+    else:
+        print(f"boxes: {pruned_boxes} \nscores: {pruned_scores} \nlabels: {pruned_labels}\n\n")
 
-        txt_bk_color = (_COLORS[cls_id] * 255 * 0.7).astype(np.uint8).tolist()
-        cv2.rectangle(
-            img,
-            (x0, y0 + 1),
-            (x0 + txt_size[0] + 1, y0 + int(1.5 * txt_size[1])),
-            txt_bk_color,
-            -1
-        )
-        cv2.putText(img, text, (x0, y0 + txt_size[1]), font, 0.4, txt_color, thickness=1)
-
-    return img
+    return (pruned_boxes, pruned_scores, pruned_labels)

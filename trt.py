@@ -14,12 +14,11 @@ class Predictor(BaseEngine):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--engine", help="TRT engine Path")
-    parser.add_argument("-c", "--conf", type=float, help="confidence threshold")
+    parser.add_argument("-c", "--conf", type=float, default=0.1, help="confidence threshold")
     parser.add_argument("-i", "--image", help="image path")
-    parser.add_argument("-o", "--output", help="image output path")
     parser.add_argument("-v", "--video",  help="video path or camera index ")
     parser.add_argument("--end2end", default=False, action="store_true",
-                        help="use end2end engine")
+                        help="use nms")
 
     args = parser.parse_args()
     print(args)
@@ -29,13 +28,13 @@ if __name__ == '__main__':
     img_path = args.image
     video = args.video
 
-    # argument represents a camera index
-    if video.isdigit():
-       video = int(video)
     conf = args.conf
     if img_path:
-      origin_img = pred.inference(img_path, conf=conf, end2end=args.end2end)
-
-      cv2.imwrite("%s" %args.output , origin_img)
+      pruned_boxes, pruned_scores, pruned_labels = pred.inference(img_path, conf=conf, end2end=args.end2end)
+      # TODO: send this data to the RPi
     if video:
+      # vid argument represents a camera index
+      # if it is a digit
+      if video.isdigit():
+        video = int(video)
       pred.detect_video(video, conf=conf, end2end=args.end2end) # set 0 use a webcam
