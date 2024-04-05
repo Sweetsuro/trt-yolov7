@@ -4,6 +4,9 @@ import pycuda.driver as cuda
 import numpy as np
 import cv2
 
+from rclpy.node import Node
+from std_msgs.msg import String
+        
 class BaseEngine(object):
     def __init__(self, engine_path):
         self.mean = None
@@ -53,52 +56,11 @@ class BaseEngine(object):
         data = [out['host'] for out in self.outputs]
         return data
 
-    def detect_video(self, video_path, conf=0.5, end2end=False):
-        cap = cv2.VideoCapture(video_path)
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        fps = int(round(cap.get(cv2.CAP_PROP_FPS)))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = 0
-        import time
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
+    def run_inference(self, frame, conf=0.5, end2end=False):
+        blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
 
-            # TODO: turn timing into logging only
-            t1 = time.time()
-            data = self.infer(blob)
-            t2 = time.time()
-
-            # net inference time in ms and average FPS
-            fps = (fps + (1. / (t2 - t1))) / 2
-            print(f"Inference: {(1E3 * (t2 - t1)):.1f}ms, Avg FPS: {fps:.1f}")
-            
-            if end2end:
-                num, final_boxes, final_scores, final_cls_inds = data
-                final_boxes = np.reshape(final_boxes/ratio, (-1, 4))
-                dets = np.concatenate([final_boxes[:num[0]], np.array(final_scores)[:num[0]].reshape(-1, 1), np.array(final_cls_inds)[:num[0]].reshape(-1, 1)], axis=-1)
-            else:
-                predictions = np.reshape(data, (1, -1, int(5+self.n_classes)))[0]
-                dets = self.postprocess(predictions,ratio)
-
-            if dets is not None:
-                final_boxes, final_scores, final_cls_inds = dets[:,
-                                                                :4], dets[:, 4], dets[:, 5]
-                pruned_boxes, pruned_scores, pruned_labels = prune_bounding_boxes(final_boxes, final_scores, final_cls_inds,
-                             conf=conf, class_names=self.class_names)
-                # TODO: send this data to the RPi
-            if cv2.waitKey(25) & 0xFF == ord('q'):
-                break
-        cap.release()
-        cv2.destroyAllWindows()
-
-    def inference(self, img_path, conf=0.5, end2end=False):
-        origin_img = cv2.imread(img_path)
-        img, ratio = preproc(origin_img, self.imgsz, self.mean, self.std)
-        data = self.infer(img)
+        data = self.infer(blob)
+        
         if end2end:
             num, final_boxes, final_scores, final_cls_inds = data
             final_boxes = np.reshape(final_boxes/ratio, (-1, 4))
@@ -109,11 +71,9 @@ class BaseEngine(object):
 
         if dets is not None:
             final_boxes, final_scores, final_cls_inds = dets[:,
-                                                             :4], dets[:, 4], dets[:, 5]
-            pruned_boxes, pruned_scores, pruned_labels = prune_bounding_boxes(final_boxes, final_scores, final_cls_inds,
-                             conf=conf, class_names=self.class_names)
-            return (pruned_boxes, pruned_scores, pruned_labels)
-        return ([], [], [])
+                                                            :4], dets[:, 4], dets[:, 5]
+            return prune_bounding_boxes(final_boxes, final_scores, final_cls_inds,
+                            conf=conf, class_names=self.class_names)
 
     @staticmethod
     def postprocess(predictions, ratio):
@@ -127,18 +87,6 @@ class BaseEngine(object):
         boxes_xyxy /= ratio
         dets = multiclass_nms(boxes_xyxy, scores, nms_thr=0.45, score_thr=0.1)
         return dets
-
-    def get_fps(self):
-        import time
-        img = np.ones((1,3,self.imgsz[0], self.imgsz[1]))
-        img = np.ascontiguousarray(img, dtype=np.float32)
-        for _ in range(5):  # warmup
-            _ = self.infer(img)
-
-        t0 = time.perf_counter()
-        for _ in range(100):  # calculate average time
-            _ = self.infer(img)
-        print(100/(time.perf_counter() - t0), 'FPS')
 
 
 def nms(boxes, scores, nms_thr):
@@ -244,10 +192,32 @@ def prune_bounding_boxes(boxes, scores, cls_ids, conf=0.5, class_names=None):
         pruned_scores.append(scores[i])
         pruned_labels.append(class_names[int(cls_ids[i])])
 
-    # TODO: turn into logging statement
-    if len(pruned_boxes) == 0:
-        print ("no bounding boxes found\n\n")
-    else:
-        print(f"boxes: {pruned_boxes} \nscores: {pruned_scores} \nlabels: {pruned_labels}\n\n")
-
     return (pruned_boxes, pruned_scores, pruned_labels)
+
+class Predictor(BaseEngine):
+    def __init__(self, engine_path):
+        super(Predictor, self).__init__(engine_path)
+        self.n_classes = 8 
+
+class MinimalPublisher(Node):
+    def __init__(self, engine_path, conf, end2end, cap):
+        super().__init__('bbox_publisher')
+        self.publisher_ = self.create_publisher(String, 'topic', 10)
+        timer_period = 10/(1E3)  # seconds
+        self.timer = self.create_timer(timer_period, self.timer_callback)
+        self.pred = Predictor(engine_path)
+        self.conf = conf
+        self.end2end = end2end
+        self.cap = cap
+        
+    def timer_callback(self):
+        msg = String()
+        # bounding boxes go in data here
+        ret, frame = self.cap.read()
+        if ret:
+            boxes, scores, labels = self.pred.run_inference(frame, self.conf, self.end2end)
+        else:
+            boxes, scores, labels = ([], [], [])
+        msg.data = f'{boxes} {scores} {labels}'
+        self.publisher_.publish(msg)
+        self.get_logger().info('Publishing: "%s"' % msg.data)
