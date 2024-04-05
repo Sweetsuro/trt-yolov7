@@ -188,7 +188,7 @@ def prune_bounding_boxes(boxes, scores, cls_ids, conf=0.5, class_names=None):
 
         # boxes represented as top left corner and bottom right corner
         # of a rectangle (compatible with opencv)
-        pruned_boxes.append([(x0, y0), (x1, y1)])
+        pruned_boxes.append([x0, y0, x1, y1])
         pruned_scores.append(scores[i])
         pruned_labels.append(class_names[int(cls_ids[i])])
 
@@ -212,12 +212,11 @@ class Publisher(Node):
         
     def timer_callback(self):
         msg = String()
-        # bounding boxes go in data here
         ret, frame = self.cap.read()
         if ret:
-            boxes, scores, labels = self.pred.run_inference(frame, self.conf, self.end2end)
+            bboxes, scores, labels = self.pred.run_inference(frame, self.conf, self.end2end)
         else:
-            boxes, scores, labels = ([], [], [])
-        msg.data = f'{boxes} {scores} {labels}'
+            bboxes, scores, labels = ([], [], [])
+        msg.data = f'{bboxes}--{scores}--{labels}'
         self.publisher_.publish(msg)
         self.get_logger().info('Publishing: "%s"' % msg.data)

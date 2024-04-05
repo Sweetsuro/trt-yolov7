@@ -1,4 +1,3 @@
-# from utils.utils import preproc, vis
 import rclpy
 from utils.utils import Publisher
 import cv2
@@ -24,12 +23,10 @@ if __name__ == '__main__':
     cap = cv2.VideoCapture(camera_idx)
 
     rclpy.init()
-    minimal_publisher = Publisher(engine_path, conf, end2end, cap)
-    rclpy.spin(minimal_publisher)
+    publisher = Publisher(engine_path, conf, end2end, cap)
+    rclpy.spin(publisher)
 
     # Destroy the node explicitly and turn off video capture
-    # (optional - otherwise it will be done automatically
-    # when the garbage collector destroys the node object)
-    minimal_publisher.destroy_node()
+    publisher.destroy_node()
     cap.release()
     rclpy.shutdown()
