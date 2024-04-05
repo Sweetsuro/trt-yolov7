@@ -199,7 +199,7 @@ class Predictor(BaseEngine):
         super(Predictor, self).__init__(engine_path)
         self.n_classes = 8 
 
-class MinimalPublisher(Node):
+class Publisher(Node):
     def __init__(self, engine_path, conf, end2end, cap):
         super().__init__('bbox_publisher')
         self.publisher_ = self.create_publisher(String, 'topic', 10)

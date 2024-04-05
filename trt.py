@@ -1,10 +1,7 @@
 # from utils.utils import preproc, vis
 import rclpy
-from utils.utils import BaseEngine, MinimalPublisher, Predictor
-import numpy as np
+from utils.utils import Publisher
 import cv2
-import time
-import os
 import argparse
 
 if __name__ == '__main__':
@@ -27,7 +24,7 @@ if __name__ == '__main__':
     cap = cv2.VideoCapture(camera_idx)
 
     rclpy.init()
-    minimal_publisher = MinimalPublisher(engine_path, conf, end2end, cap)
+    minimal_publisher = Publisher(engine_path, conf, end2end, cap)
     rclpy.spin(minimal_publisher)
 
     # Destroy the node explicitly and turn off video capture
