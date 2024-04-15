@@ -58,7 +58,7 @@ class BaseEngine(object):
         return data
 
     def run_inference(self, frame, conf=0.5, end2end=False):
-        blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
+        blob, ratio, _ = preproc(frame, self.imgsz, self.mean, self.std, scale=0.5)
 
         data = self.infer(blob)
         
@@ -85,7 +85,7 @@ class BaseEngine(object):
             ret, frame = cap.read()
             if not ret:
                 break
-            blob, ratio = preproc(frame, self.imgsz, self.mean, self.std)
+            blob, ratio, frame = preproc(frame, self.imgsz, self.mean, self.std, scale=0.5)
             t1 = time.time()
             data = self.infer(blob)
             t2 = time.time()
@@ -114,7 +114,7 @@ class BaseEngine(object):
 
     def inference(self, img_path, conf=0.5, end2end=False):
         origin_img = cv2.imread(img_path)
-        img, ratio = preproc(origin_img, self.imgsz, self.mean, self.std)
+        img, ratio, origin_img = preproc(origin_img, self.imgsz, self.mean, self.std)
         data = self.infer(img)
         if end2end:
             num, final_boxes, final_scores, final_cls_inds = data
@@ -198,31 +198,40 @@ def multiclass_nms(boxes, scores, nms_thr, score_thr):
         return None
     return np.concatenate(final_dets, 0)
 
-
-def preproc(image, input_size, mean, std, swap=(2, 0, 1)):
+def preproc(image, input_size, mean, std, swap=(2, 0, 1), scale=1):
     if len(image.shape) == 3:
         padded_img = np.ones((input_size[0], input_size[1], 3)) * 114.0
     else:
         padded_img = np.ones(input_size) * 114.0
     img = np.array(image)
     r = min(input_size[0] / img.shape[0], input_size[1] / img.shape[1])
-
+    width = int(img.shape[1] * r)
+    height = int(img.shape[0] * r)
     resized_img = cv2.resize(
         img,
-        (int(img.shape[0] * r), int(img.shape[0] * r)),
+        (width, height),
         interpolation=cv2.INTER_LINEAR,
     ).astype(np.float32)
-    # print(f'img shape 1: {int(img.shape[0] * r)}, img shape 2: {int(img.shape[0] * r)}')
-    padded_img[: int(img.shape[0] * r), : int(img.shape[0] * r)] = resized_img
-    padded_img = padded_img[:, :, ::-1]
-    padded_img /= 255.0
+    padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
+
+    centerX,centerY = int(height/2), int(width/2)
+    radiusX,radiusY = int(scale*height/2), int(scale*width/2)
+
+    minX,maxX = centerX-radiusX, centerX+radiusX
+    minY,maxY = centerY-radiusY, centerY+radiusY
+
+    cropped = image[minX:maxX, minY:maxY]
+    resized_cropped = cv2.resize(cropped, (width, height)).astype(np.float32)
+    resized_cropped /= 255.0
+
+    padded_img = resized_cropped[:, :, ::-1]    
     if mean is not None:
         padded_img -= mean
     if std is not None:
         padded_img /= std
     padded_img = padded_img.transpose(swap)
     padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
-    return padded_img, r
+    return padded_img, r, resized_cropped
 
 def rainbow_fill(size=50):  # simpler way to generate rainbow color
     cmap = plt.get_cmap('jet')
