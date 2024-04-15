@@ -21,7 +21,7 @@ if __name__ == '__main__':
     print(args)
 
     pred = Predictor(engine_path=args.engine)
-    pred.get_fps()
+    # pred.get_fps()
     img_path = args.image
     video = args.video
 
